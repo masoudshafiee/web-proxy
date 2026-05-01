@@ -1,0 +1,25 @@
+name: SOCKS5 Proxy
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Command to execute'
+        required: true
+        default: 'curl -s https://example.com'
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute command
+        run: |
+          echo "Running: ${{ github.event.inputs.command }}"
+          eval "${{ github.event.inputs.command }}"
+      - name: Save output
+        run: |
+          eval "${{ github.event.inputs.command }}" > output.txt 2>&1 || true
+          echo "Output saved"
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-output
+          path: output.txt

@@ -1,0 +1,22 @@
+name: Ngrok Tunnel
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to fetch'
+        required: true
+        default: 'https://example.com'
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch URL
+        run: |
+          echo "Fetching: ${{ github.event.inputs.url }}"
+          curl -sL "${{ github.event.inputs.url }}" > output.html 2>&1 || echo "Failed" > output.html
+          echo "Content saved"
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetched-content
+          path: output.html

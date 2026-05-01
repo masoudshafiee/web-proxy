@@ -2,23 +2,43 @@ name: Fetch URL and Comment
 on:
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to fetch'
+        required: true
+        default: 'https://example.com'
 jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: read
+      contents: write
     steps:
-      - name: Get URL from issue body
+      - name: Get URL
         id: url
         run: |
-          echo "URL<<EOF" >> $GITHUB_OUTPUT
-          echo "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "URL<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ github.event.inputs.url }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "URL<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
       - name: Fetch content
         run: |
           curl -sL "${{ steps.url.outputs.URL }}" > page.html 2>/dev/null || echo "Failed to fetch" > page.html
-      - name: Post as comment
+          echo "Content saved to page.html"
+          cat page.html | head -c 500
+      - name: Save as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetched-content
+          path: page.html
+      - name: Post as comment (if issue)
+        if: github.event_name == 'issues'
         uses: peter-evans/create-or-update-comment@v3
         with:
           issue-number: ${{ github.event.issue.number }}

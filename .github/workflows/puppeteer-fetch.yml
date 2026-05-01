@@ -1,0 +1,53 @@
+name: Puppeteer Fetch
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to fetch with browser'
+        required: true
+        default: 'https://example.com'
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Puppeteer
+        run: |
+          npm install puppeteer
+      - name: Fetch with browser
+        run: |
+          node -e "
+          const puppeteer = require('puppeteer');
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            const page = await browser.newPage();
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            
+            console.log('Fetching: ${{ github.event.inputs.url }}');
+            await page.goto('${{ github.event.inputs.url }}', {
+              waitUntil: 'networkidle0',
+              timeout: 30000
+            });
+            
+            const content = await page.content();
+            console.log('Content length:', content.length);
+            
+            // Save to file
+            const fs = require('fs');
+            fs.writeFileSync('output.html', content);
+            console.log('Saved to output.html');
+            
+            await browser.close();
+          })();
+          "
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-content
+          path: output.html
