@@ -13,10 +13,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install Puppeteer
+      - name: Install Puppeteer with stealth plugin
         run: |
-          npm install puppeteer
-      - name: Fetch with browser and post as comment
+          npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
+      - name: Fetch with stealth browser and post as comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -26,20 +26,48 @@ jobs:
           echo "Fetching: $URL"
           
           node -e "
-          const puppeteer = require('puppeteer');
+          const puppeteer = require('puppeteer-extra');
+          const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+          puppeteer.use(StealthPlugin());
+          
           (async () => {
             const browser = await puppeteer.launch({
               headless: 'new',
-              args: ['--no-sandbox', '--disable-setuid-sandbox']
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--window-size=1920,1080'
+              ]
             });
             const page = await browser.newPage();
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            await page.setViewport({ width: 1920, height: 1080 });
+            
+            // Random user agent
+            const userAgents = [
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ];
+            await page.setUserAgent(userAgents[Math.floor(Math.random() * userAgents.length)]);
+            
+            // Set extra headers
+            await page.setExtraHTTPHeaders({
+              'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+              'Accept-Encoding': 'gzip, deflate, br'
+            });
             
             console.log('Navigating to: $URL');
+            
+            // Wait for page to fully load
             await page.goto('$URL', {
               waitUntil: 'networkidle0',
               timeout: 60000
             });
+            
+            // Extra wait for Cloudflare challenge
+            await new Promise(r => setTimeout(r, 5000));
             
             const content = await page.content();
             console.log('Content length:', content.length);
