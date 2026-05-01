@@ -1,14 +1,13 @@
 name: Puppeteer Fetch
 on:
-  workflow_dispatch:
-    inputs:
-      url:
-        description: 'URL to fetch with browser'
-        required: true
-        default: 'https://example.com'
+  issues:
+    types: [opened]
 jobs:
   fetch:
+    if: contains(github.event.issue.title, 'PUPPETEER:')
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -17,8 +16,15 @@ jobs:
       - name: Install Puppeteer
         run: |
           npm install puppeteer
-      - name: Fetch with browser
+      - name: Fetch with browser and post as comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
+          URL="${{ github.event.issue.body }}"
+          echo "Fetching: $URL"
+          
           node -e "
           const puppeteer = require('puppeteer');
           (async () => {
@@ -29,10 +35,10 @@ jobs:
             const page = await browser.newPage();
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             
-            console.log('Fetching: ${{ github.event.inputs.url }}');
-            await page.goto('${{ github.event.inputs.url }}', {
+            console.log('Navigating to: $URL');
+            await page.goto('$URL', {
               waitUntil: 'networkidle0',
-              timeout: 30000
+              timeout: 60000
             });
             
             const content = await page.content();
@@ -41,13 +47,18 @@ jobs:
             // Save to file
             const fs = require('fs');
             fs.writeFileSync('output.html', content);
-            console.log('Saved to output.html');
             
             await browser.close();
           })();
           "
-      - name: Upload result
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-content
-          path: output.html
+          
+          # Post content as comment using GitHub API
+          echo "Posting comment to issue #$ISSUE_NUMBER..."
+          COMMENT=$(cat output.html | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"body\": $COMMENT}" \
+            "https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER/comments"
+          
+          echo "Comment posted!"
