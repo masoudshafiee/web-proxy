@@ -1,0 +1,25 @@
+name: Fetch URL and Comment
+on:
+  issues:
+    types: [opened]
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Get URL from issue body
+        id: url
+        run: |
+          echo "URL<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ github.event.issue.body }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Fetch content
+        run: |
+          curl -sL "${{ steps.url.outputs.URL }}" > page.html 2>/dev/null || echo "Failed to fetch" > page.html
+      - name: Post as comment
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body-path: page.html
