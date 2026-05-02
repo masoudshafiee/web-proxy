@@ -16,14 +16,31 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           URL="${{ github.event.issue.body }}"
-          curl -sL --max-time 15 "$URL" > output.html 2>/dev/null
-          node -e "
-          const h=require('https');
-          const c=require('fs').readFileSync('output.html','utf8');
-          const d=JSON.stringify({body:c});
-          const o={hostname:'api.github.com',path:'/repos/'+process.env.REPO+'/issues/'+process.env.ISSUE_NUMBER+'/comments',method:'POST',headers:{'User-Agent':'pf','Authorization':'token '+process.env.GH_TOKEN,'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)}};
-          const r=h.request(o,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log('Done',res.statusCode))});
-          r.on('error',e=>console.error(e.message));
-          r.write(d);
-          r.end();
-          "
+          echo "Fetching: $URL"
+          curl -sL --connect-timeout 10 --max-time 30 "$URL" > output.html 2>&1
+          SIZE=$(wc -c < output.html)
+          echo "Downloaded: $SIZE bytes"
+          if [ "$SIZE" -gt 100 ]; then
+            node -e "
+            const h=require('https');
+            const c=require('fs').readFileSync('output.html','utf8');
+            const d=JSON.stringify({body:c});
+            const o={hostname:'api.github.com',path:'/repos/'+process.env.REPO+'/issues/'+process.env.ISSUE_NUMBER+'/comments',method:'POST',headers:{'User-Agent':'pf','Authorization':'token '+process.env.GH_TOKEN,'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)}};
+            const r=h.request(o,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log('Comment posted:',res.statusCode))});
+            r.on('error',e=>console.error('Error:',e.message));
+            r.write(d);
+            r.end();
+            "
+          else
+            echo "File too small, posting error"
+            node -e "
+            const h=require('https');
+            const c='Failed to fetch: $URL (size: $SIZE bytes)';
+            const d=JSON.stringify({body:c});
+            const o={hostname:'api.github.com',path:'/repos/'+process.env.REPO+'/issues/'+process.env.ISSUE_NUMBER+'/comments',method:'POST',headers:{'User-Agent':'pf','Authorization':'token '+process.env.GH_TOKEN,'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)}};
+            const r=h.request(o,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log('Error posted:',res.statusCode))});
+            r.on('error',e=>console.error('Error:',e.message));
+            r.write(d);
+            r.end();
+            "
+          fi
