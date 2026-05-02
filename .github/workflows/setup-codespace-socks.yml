@@ -1,0 +1,44 @@
+name: Setup Codespace SOCKS5
+on:
+  workflow_dispatch:
+    inputs:
+      codespace:
+        description: 'Codespace name'
+        required: true
+        default: 'psychic-giggle-69g59p55prf99v'
+      action:
+        description: 'Action (install/ssh-config/status)'
+        required: true
+        default: 'install'
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install gh
+        run: |
+          type -p curl >/dev/null || sudo apt-get install curl -y
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update && sudo apt-get install gh -y
+      
+      - name: Auth with GitHub
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+      
+      - name: Install SOCKS5 on Codespace
+        if: ${{ github.event.inputs.action == 'install' }}
+        run: |
+          echo "Installing SOCKS5 on codespace: ${{ github.event.inputs.codespace }}"
+          gh codespace ssh -c ${{ github.event.inputs.codespace }} -- "sudo apt-get install -y -qq microsocks && sudo pkill microsocks 2>/dev/null && sudo nohup microsocks -i 0.0.0.0 -p 1080 > /tmp/socks.log 2>&1 & echo 'SOCKS5_INSTALLED_OK'"
+      
+      - name: Get SSH Config
+        if: ${{ github.event.inputs.action == 'ssh-config' }}
+        run: |
+          echo "Getting SSH config for codespace: ${{ github.event.inputs.codespace }}"
+          gh codespace ssh -c ${{ github.event.inputs.codespace }} --config
+      
+      - name: Check Codespace Status
+        if: ${{ github.event.inputs.action == 'status' }}
+        run: |
+          echo "Checking status of codespace: ${{ github.event.inputs.codespace }}"
+          gh codespace view -c ${{ github.event.inputs.codespace }}
