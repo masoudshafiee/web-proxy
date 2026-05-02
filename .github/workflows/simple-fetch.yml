@@ -1,0 +1,29 @@
+name: Simple Fetch
+on:
+  issues:
+    types: [opened]
+jobs:
+  fetch:
+    if: contains(github.event.issue.title, 'FETCH:')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Fetch URL
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          URL="${{ github.event.issue.body }}"
+          curl -sL --max-time 15 "$URL" > output.html 2>/dev/null
+          node -e "
+          const h=require('https');
+          const c=require('fs').readFileSync('output.html','utf8');
+          const d=JSON.stringify({body:c});
+          const o={hostname:'api.github.com',path:'/repos/'+process.env.REPO+'/issues/'+process.env.ISSUE_NUMBER+'/comments',method:'POST',headers:{'User-Agent':'pf','Authorization':'token '+process.env.GH_TOKEN,'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)}};
+          const r=h.request(o,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log('Done',res.statusCode))});
+          r.on('error',e=>console.error(e.message));
+          r.write(d);
+          r.end();
+          "
