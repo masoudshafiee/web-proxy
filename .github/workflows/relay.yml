@@ -19,5 +19,6 @@ jobs:
         env:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
           RESPONSE_GIST_ID: ${{ secrets.RESPONSE_GIST_ID }}
-          GITHUB_TOKEN: ${{ secrets.GIST_PAT }}
+          GIST_PAT: ${{ secrets.GIST_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python relay_agent.py

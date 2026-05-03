@@ -14,10 +14,12 @@ def log(msg):
 
 command_gist = os.environ['COMMAND_GIST_ID']
 response_gist = os.environ['RESPONSE_GIST_ID']
-token = os.environ['GITHUB_TOKEN']
+# Try GIST_PAT first, fall back to GITHUB_TOKEN (default Actions token)
+token = os.environ.get('GIST_PAT') or os.environ.get('GITHUB_TOKEN', '')
 
 log(f'COMMAND_GIST_ID: {command_gist}')
 log(f'RESPONSE_GIST_ID: {response_gist}')
+log(f'Using token: {"GIST_PAT" if "GIST_PAT" in os.environ else "GITHUB_TOKEN"}')
 
 session = requests.Session()
 session.headers.update({
@@ -29,6 +31,9 @@ session.headers.update({
 def get_command():
     try:
         r = session.get(f'https://api.github.com/gists/{command_gist}', timeout=15)
+        if r.status_code == 403:
+            log(f'403 Forbidden - token may lack gist scope. Response: {r.text[:200]}')
+            return None
         r.raise_for_status()
         gist = r.json()
         if 'command.json' not in gist.get('files', {}):
@@ -52,17 +57,12 @@ def send_response(job_id, response_b64):
         log(f'Sending response for {job_id} to gist {response_gist}...')
         r = session.patch(f'https://api.github.com/gists/{response_gist}', json=patch_data, timeout=30)
         log(f'PATCH status: {r.status_code}')
-        if r.status_code >= 400:
+        if r.status_code == 403:
+            log(f'403 Forbidden on PATCH. Response: {r.text[:300]}')
+        elif r.status_code >= 400:
             log(f'PATCH error body: {r.text[:500]}')
         r.raise_for_status()
         log(f'Response sent for {job_id}: {len(response_b64)} bytes')
-        
-        # Also write to command gist for debugging
-        debug_payload = {'id': job_id, 'response': f'DEBUG: sent to gist {response_gist}, size={len(response_b64)}'}
-        debug_content = json.dumps(debug_payload)
-        debug_data = {'files': {'response.json': {'content': debug_content}}}
-        r2 = session.patch(f'https://api.github.com/gists/{command_gist}', json=debug_data, timeout=15)
-        log(f'DEBUG PATCH to command gist: {r2.status_code}')
     except Exception as e:
         log(f'send_response error: {e}')
 
