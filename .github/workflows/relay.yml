@@ -84,10 +84,12 @@ jobs:
                 [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
                 FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
                 echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
-                RESPONSE=$(curl -s --max-time 30 -D - "$FULL_URL" 2>/dev/null || true)
+                # Try curl with verbose for debugging, capture both stdout and stderr
+                RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
+                echo "[$(date -u +%H:%M:%S)] curl exit code: $?"
               else
                 FULL_URL="${PROTO}://${HOST}/"
-                RESPONSE=$(curl -s --max-time 30 -D - "$FULL_URL" 2>/dev/null || true)
+                RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
               fi
             else
               # For non-HTTP ports, use bash /dev/tcp
