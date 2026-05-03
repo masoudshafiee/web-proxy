@@ -14,13 +14,12 @@ def log(msg):
 
 command_gist = os.environ['COMMAND_GIST_ID']
 response_gist = os.environ['RESPONSE_GIST_ID']
-# Use GITHUB_TOKEN (default Actions token) - it has higher rate limits
-# GIST_PAT is optional fallback
-token = os.environ.get('GITHUB_TOKEN', os.environ.get('GIST_PAT', ''))
+# Must use GIST_PAT - GITHUB_TOKEN doesn't have gist scope
+token = os.environ.get('GIST_PAT', '')
 
 log(f'COMMAND_GIST_ID: {command_gist}')
 log(f'RESPONSE_GIST_ID: {response_gist}')
-log(f'Using token source: {"GITHUB_TOKEN" if "GITHUB_TOKEN" in os.environ else "GIST_PAT"}')
+log(f'Token length: {len(token)} chars')
 
 session = requests.Session()
 session.headers.update({
@@ -34,6 +33,7 @@ def get_command():
         r = session.get(f'https://api.github.com/gists/{command_gist}', timeout=15)
         if r.status_code == 403:
             log(f'403 Forbidden. Response: {r.text[:200]}')
+            time.sleep(5)  # backoff on 403
             return None
         r.raise_for_status()
         gist = r.json()
