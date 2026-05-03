@@ -12,6 +12,10 @@ sys.stderr.reconfigure(line_buffering=True)
 command_gist = os.environ['COMMAND_GIST_ID']
 response_gist = os.environ['RESPONSE_GIST_ID']
 token = os.environ['GITHUB_TOKEN']
+
+log(f'COMMAND_GIST_ID: {command_gist}')
+log(f'RESPONSE_GIST_ID: {response_gist}')
+
 session = requests.Session()
 session.headers.update({
     'Authorization': f'token {token}',
@@ -45,7 +49,7 @@ def send_response(job_id, response_b64):
     content = json.dumps(payload)
     patch_data = {'files': {'response.json': {'content': content}}}
     try:
-        log(f'Sending response for {job_id}...')
+        log(f'Sending response for {job_id} to gist {response_gist}...')
         r = session.patch(f'https://api.github.com/gists/{response_gist}', json=patch_data, timeout=30)
         log(f'PATCH status: {r.status_code}')
         if r.status_code >= 400:
