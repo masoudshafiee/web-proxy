@@ -72,18 +72,37 @@ jobs:
               PAYLOAD=""
             fi
             
-            # TCP connection using bash /dev/tcp
+          # For HTTP (port 80), use curl directly (more reliable)
             RESPONSE=""
-            if timeout 30 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
-              exec {fd}<>/dev/tcp/$HOST/$PORT 2>/dev/null || true
+            if [ "$PORT" = "80" ] || [ "$PORT" = "443" ]; then
+              PROTO="http"
+              [ "$PORT" = "443" ] && PROTO="https"
+              # Build URL from host and payload
               if [ -n "$PAYLOAD" ]; then
-                printf '%s' "$PAYLOAD" >&$fd 2>/dev/null || true
+                # Extract path from HTTP request
+                HTTP_PATH=$(echo "$PAYLOAD" | head -1 | awk '{print $2}')
+                [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
+                FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
+                echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
+                RESPONSE=$(curl -s --max-time 30 -D - "$FULL_URL" 2>/dev/null || true)
+              else
+                FULL_URL="${PROTO}://${HOST}/"
+                RESPONSE=$(curl -s --max-time 30 -D - "$FULL_URL" 2>/dev/null || true)
               fi
-              # Read response with timeout
-              while IFS= read -r -t 5 line || [ -n "$line" ]; do
-                RESPONSE+="$line"$'\n'
-              done <&$fd 2>/dev/null || true
-              exec {fd}>&- 2>/dev/null || true
+            else
+              # For non-HTTP ports, use bash /dev/tcp
+              if timeout 10 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
+                exec 3<>/dev/tcp/$HOST/$PORT 2>/dev/null || true
+                if [ -n "$PAYLOAD" ]; then
+                  printf '%s' "$PAYLOAD" >&3 2>/dev/null || true
+                fi
+                # Read response with timeout
+                RESPONSE=""
+                while IFS= read -r -t 3 line <&3 2>/dev/null || [ -n "$line" ]; do
+                  RESPONSE+="$line"$'\n'
+                done
+                exec 3>&- 2>/dev/null || true
+              fi
             fi
             
             # Encode response
