@@ -3,55 +3,73 @@
 Gist Tunnel - Local HTTP/HTTPS Proxy
 Uses 'gh api' to communicate with GitHub Gists.
 Acts as a transparent HTTP proxy on 127.0.0.1:8080
+Supports both HTTP and HTTPS CONNECT tunneling.
 """
 import subprocess, json, time, base64, uuid, sys, os, threading, socket as sock_mod
-import http.server, socketserver, urllib.parse, select
+import http.server, socketserver, urllib.parse, select, tempfile
 
 # ===== CONFIGURATION =====
 COMMAND_GIST = "5e6abed0b61ab902b6efd837e57cd3e2"
-RESPONSE_GIST = "5e6abed0b61ab902b6efd837e57cd3e2"  # same gist for simplicity
+RESPONSE_GIST = "94bef5a7a4c1433c50cd8d17c2712693"
 LISTEN_PORT = 8080
-POLL_INTERVAL = 1.5  # seconds between polls
-MAX_RESPONSE_SIZE = 2_000_000  # 2MB
+POLL_INTERVAL = 1.5
+MAX_RESPONSE_SIZE = 2_000_000
 # =========================
 
-def gh_api(method, endpoint, data=None, raw=False):
-    """Execute gh api command and return output."""
+def gh_api(method, endpoint, data=None):
     cmd = ["gh", "api", "--method", method, endpoint]
-    stdin_data = None
-    if data is not None:
-        stdin_data = json.dumps(data) if isinstance(data, dict) else data
-    
-    # Retry up to 3 times with backoff
+    temp_path = None
+    if data:
+        fd, temp_path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, 'w') as f:
+            f.write(json.dumps(data))
+        cmd.extend(["--input", temp_path])
     for attempt in range(3):
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE if stdin_data else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8'
-            )
-            out, err = proc.communicate(input=stdin_data, timeout=30)
-            if proc.returncode == 0:
-                if raw:
-                    return out.encode('utf-8') if isinstance(out, str) else out
-                return out
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if temp_path:
+                try: os.unlink(temp_path)
+                except: pass
+            if result.returncode == 0:
+                return json.loads(result.stdout)
             if attempt < 2:
                 time.sleep(2 ** attempt)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        except Exception as e:
+            if temp_path:
+                try: os.unlink(temp_path)
+                except: pass
             if attempt < 2:
                 time.sleep(2 ** attempt)
-        except Exception:
+    raise RuntimeError(f"gh api error after 3 retries")
+
+def gh_api_raw(method, url, data=None):
+    """Execute gh api with a full URL (for raw.githubusercontent.com PUT)."""
+    cmd = ["gh", "api", "--method", method, "--raw", url]
+    temp_path = None
+    if data:
+        fd, temp_path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, 'w') as f:
+            f.write(data if isinstance(data, str) else json.dumps(data))
+        cmd.extend(["--input", temp_path])
+    for attempt in range(3):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if temp_path:
+                try: os.unlink(temp_path)
+                except: pass
+            if result.returncode == 0:
+                return result.stdout
             if attempt < 2:
                 time.sleep(2 ** attempt)
-    
-    raise RuntimeError(f"gh api error after 3 retries: {err.strip()[:200] if 'err' in dir() else 'timeout'}")
+        except Exception as e:
+            if temp_path:
+                try: os.unlink(temp_path)
+                except: pass
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(f"gh api raw error after 3 retries")
 
 def push_command(job_id, host, port, payload=b''):
-    """Write a command to the Gist for the Runner to process."""
     payload_b64 = base64.b64encode(payload).decode()
     content = json.dumps({
         "id": job_id,
@@ -63,28 +81,30 @@ def push_command(job_id, host, port, payload=b''):
     gh_api("PATCH", f"/gists/{COMMAND_GIST}", data=patch_data)
 
 def get_response(job_id, timeout_sec=60):
-    """Poll the response gist until our job_id appears or timeout."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
-            # Use gh api to get gist content
-            raw = gh_api("GET", f"/gists/{RESPONSE_GIST}")
-            gist = json.loads(raw) if isinstance(raw, str) else raw
+            gist = gh_api("GET", f"/gists/{RESPONSE_GIST}")
             if "files" in gist and "response.json" in gist["files"]:
-                content = gist["files"]["response.json"]["content"]
-                resp = json.loads(content)
-                if resp.get("id") == job_id:
-                    resp_b64 = resp.get("response", "")
-                    if resp_b64:
-                        return base64.b64decode(resp_b64)
-                    return b""
+                raw_url = gist["files"]["response.json"]["raw_url"]
+                # Read raw content directly
+                result = subprocess.run(
+                    ["gh", "api", "--method", "GET", "--raw", raw_url],
+                    capture_output=True, text=True, timeout=15
+                )
+                if result.returncode == 0 and result.stdout:
+                    resp = json.loads(result.stdout)
+                    if resp.get("id") == job_id:
+                        resp_b64 = resp.get("response", "")
+                        if resp_b64:
+                            return base64.b64decode(resp_b64)
+                        return b""
         except Exception as e:
             pass
         time.sleep(POLL_INTERVAL)
     raise TimeoutError(f"No response for job {job_id} within {timeout_sec}s")
 
 def fetch_via_tunnel(host, port, payload=b''):
-    """Send a TCP request through the Gist tunnel and return the response."""
     job_id = f"req-{uuid.uuid4().hex[:8]}"
     push_command(job_id, host, port, payload)
     return get_response(job_id)
@@ -93,7 +113,7 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
     """HTTP Proxy handler that forwards requests through Gist tunnel."""
     
     def do_CONNECT(self):
-        """Handle HTTPS CONNECT method."""
+        """Handle HTTPS CONNECT method - tunnel raw TCP through Gist."""
         try:
             host, port_str = self.path.split(':')
             port = int(port_str)
@@ -101,57 +121,49 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(400, "Bad CONNECT request")
             return
         
+        print(f"[CONNECT] {host}:{port}")
+        
         try:
-            # Send 200 Connection Established to client
             self.send_response(200, "Connection Established")
             self.end_headers()
             
-            # Now relay data bidirectionally
-            self._relay_tunnel(host, port)
+            client = self.connection
+            client.settimeout(15)
             
+            while True:
+                try:
+                    data = client.recv(65536)
+                    if not data:
+                        break
+                    
+                    job_id = f"rel-{uuid.uuid4().hex[:8]}"
+                    push_command(job_id, host, port, payload=data)
+                    response = get_response(job_id, timeout_sec=30)
+                    
+                    if response:
+                        client.sendall(response)
+                    else:
+                        break
+                        
+                except socket.timeout:
+                    break
+                except TimeoutError:
+                    break
+                except Exception as e:
+                    print(f"[CONNECT] relay error: {e}")
+                    break
+            
+            try:
+                client.close()
+            except:
+                pass
+                
         except Exception as e:
-            print(f"CONNECT error {host}:{port}: {e}")
+            print(f"[CONNECT] error: {e}")
             try:
                 self.send_error(502, str(e))
             except:
                 pass
-    
-    def _relay_tunnel(self, host, port):
-        """Relay data between client and remote via tunnel."""
-        client = self.connection
-        client.settimeout(10)
-        
-        while True:
-            try:
-                # Read data from client (TLS handshake, HTTP request, etc.)
-                data = client.recv(65536)
-                if not data:
-                    break
-                
-                # Send through tunnel with a new job
-                job_id = f"rel-{uuid.uuid4().hex[:8]}"
-                push_command(job_id, host, port, payload=data)
-                
-                # Get response
-                response = get_response(job_id)
-                if response:
-                    client.sendall(response)
-                else:
-                    break
-                    
-            except socket.timeout:
-                break
-            except TimeoutError:
-                print(f"Tunnel timeout for {host}:{port}")
-                break
-            except Exception as e:
-                print(f"Tunnel relay error: {e}")
-                break
-        
-        try:
-            client.close()
-        except:
-            pass
     
     def _handle_http_request(self, method):
         """Handle regular HTTP requests (GET, POST, etc.)."""
@@ -163,21 +175,16 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(400, "No host in URL")
             return
         
-        # Reconstruct the raw HTTP request
         path = parsed.path or '/'
         if parsed.query:
             path += '?' + parsed.query
         
-        # Build request line
         raw_request = f"{method} {path} HTTP/1.1\r\n".encode()
-        
-        # Add headers
         for key, value in self.headers.items():
             if key.lower() not in ('proxy-connection', 'proxy-authorization'):
                 raw_request += f"{key}: {value}\r\n".encode()
         raw_request += b"\r\n"
         
-        # Add body if present
         content_length = int(self.headers.get('Content-Length', 0))
         if content_length > 0:
             body = self.rfile.read(content_length)
@@ -190,7 +197,7 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_error(502, "Empty response from tunnel")
         except Exception as e:
-            print(f"HTTP proxy error {method} {host}:{port}: {e}")
+            print(f"[HTTP] error {method} {host}:{port}: {e}")
             try:
                 self.send_error(502, str(e))
             except:
@@ -205,11 +212,9 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_PATCH(self): self._handle_http_request('PATCH')
     
     def log_message(self, format, *args):
-        """Suppress default logging."""
         pass
 
 def main():
-    # Verify gh CLI is authenticated
     try:
         result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
@@ -219,7 +224,6 @@ def main():
         print("ERROR: 'gh' CLI not found. Install GitHub CLI first.")
         sys.exit(1)
     
-    # Verify we can reach the Gist
     try:
         gh_api("GET", f"/gists/{COMMAND_GIST}")
         print(f"[+] Gist {COMMAND_GIST} accessible")
@@ -229,6 +233,7 @@ def main():
     
     print(f"[*] Starting Gist Tunnel Proxy on 127.0.0.1:{LISTEN_PORT}")
     print(f"[*] Set your browser/proxy to HTTP proxy 127.0.0.1:{LISTEN_PORT}")
+    print(f"[*] Supports HTTP + HTTPS (CONNECT)")
     print(f"[*] Press Ctrl+C to stop")
     
     class ThreadedHTTPServer(socketserver.ThreadingTCPServer):
