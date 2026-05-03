@@ -19,26 +19,18 @@ MAX_RESPONSE_SIZE = 2_000_000
 
 def gh_api(method, endpoint, data=None):
     cmd = ["gh", "api", "--method", method, endpoint]
-    temp_path = None
     if data:
-        fd, temp_path = tempfile.mkstemp(suffix=".json")
-        with os.fdopen(fd, 'w') as f:
-            f.write(json.dumps(data))
-        cmd.extend(["--input", temp_path])
+        # Use -f for simple fields
+        for key, value in data.items():
+            cmd.extend(["-f", f"{key}={json.dumps(value) if isinstance(value, (dict, list)) else value}"])
     for attempt in range(3):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if temp_path:
-                try: os.unlink(temp_path)
-                except: pass
             if result.returncode == 0:
                 return json.loads(result.stdout)
             if attempt < 2:
                 time.sleep(2 ** attempt)
         except Exception as e:
-            if temp_path:
-                try: os.unlink(temp_path)
-                except: pass
             if attempt < 2:
                 time.sleep(2 ** attempt)
     raise RuntimeError(f"gh api error after 3 retries")
