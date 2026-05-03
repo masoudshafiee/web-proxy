@@ -21,33 +21,18 @@ jobs:
           echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # Test 1: curl to github.com
-          echo "[$(date -u +%H:%M:%S)] Test 1: curl github.com"
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1
+          # Use gh with --hostname github.com to bypass api.github.com blocking
+          # github.com is whitelisted, api.github.com is blocked in Iran
+          alias gh='gh --hostname github.com'
           
-          # Test 2: curl to api.github.com
-          echo "[$(date -u +%H:%M:%S)] Test 2: curl api.github.com"
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://api.github.com" 2>&1
-          
-          # Test 3: curl to example.com
-          echo "[$(date -u +%H:%M:%S)] Test 3: curl example.com"
-          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1
-          
-          # Test 4: gh api
-          echo "[$(date -u +%H:%M:%S)] Test 4: gh api"
-          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 300
+          # Test connectivity
+          echo "[$(date -u +%H:%M:%S)] Testing gh connectivity..."
+          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200 || echo "gh FAILED"
           echo ""
-          
-          # Test 5: gh api with verbose
-          echo "[$(date -u +%H:%M:%S)] Test 5: gh api verbose"
-          GH_DEBUG=api gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 500
-          echo ""
-          
-          echo "[$(date -u +%H:%M:%S)] Tests complete, entering main loop"
           
           # Main polling loop
           while true; do
-            # Fetch command gist using gh
+            # Fetch command gist using gh with hostname github.com
             GIST=$(gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
             
             if [ -z "$GIST" ]; then
