@@ -13,7 +13,11 @@ command_gist = os.environ['COMMAND_GIST_ID']
 response_gist = os.environ['RESPONSE_GIST_ID']
 token = os.environ['GITHUB_TOKEN']
 session = requests.Session()
-session.headers.update({'Authorization': f'token {token}'})
+session.headers.update({
+    'Authorization': f'token {token}',
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'gist-tunnel-relay/1.0'
+})
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -41,7 +45,11 @@ def send_response(job_id, response_b64):
     content = json.dumps(payload)
     patch_data = {'files': {'response.json': {'content': content}}}
     try:
-        r = session.patch(f'https://api.github.com/gists/{response_gist}', json=patch_data, timeout=15)
+        log(f'Sending response for {job_id}...')
+        r = session.patch(f'https://api.github.com/gists/{response_gist}', json=patch_data, timeout=30)
+        log(f'PATCH status: {r.status_code}')
+        if r.status_code >= 400:
+            log(f'PATCH error body: {r.text[:500]}')
         r.raise_for_status()
         log(f'Response sent for {job_id}: {len(response_b64)} bytes')
     except Exception as e:
