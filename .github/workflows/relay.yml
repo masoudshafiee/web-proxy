@@ -9,8 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Run Gist Tunnel Relay Agent
         env:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
@@ -23,12 +21,14 @@ jobs:
           echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # Use gh CLI instead of curl to api.github.com (which is blocked in Iran)
-          # gh uses github.com which is whitelisted
+          # Test gh connectivity first
+          echo "[$(date -u +%H:%M:%S)] Testing gh connectivity..."
+          GH_TEST=$(gh api "gists/$COMMAND_GIST_ID" 2>&1)
+          echo "[$(date -u +%H:%M:%S)] gh test result: $(echo "$GH_TEST" | head -c 200)"
           
           # Main polling loop
           while true; do
-            # Fetch command gist using gh (goes through github.com, not blocked)
+            # Fetch command gist using gh
             GIST=$(gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
             
             if [ -z "$GIST" ]; then
@@ -117,7 +117,7 @@ jobs:
               --arg resp "$RESPONSE_B64" \
               '{id: $id, response: $resp}')
             
-            # Update response gist using gh (goes through github.com, not blocked)
+            # Update response gist using gh
             echo "$RESPONSE_JSON" > /tmp/response_payload.json
             gh api --method PATCH "gists/$RESPONSE_GIST_ID" \
               --input /tmp/response_payload.json > /dev/null 2>&1
