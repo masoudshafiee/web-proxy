@@ -14,20 +14,28 @@ jobs:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
           RESPONSE_GIST_ID: ${{ secrets.RESPONSE_GIST_ID }}
           GH_TOKEN: ${{ secrets.GIST_PAT }}
-          # Use github.com instead of api.github.com (api.github.com is blocked in Iran)
-          GITHUB_API_URL: https://github.com/api/v3
         shell: bash
         run: |
           echo "=== Gist Tunnel Relay Agent Started ==="
           echo "Command Gist: $COMMAND_GIST_ID"
           echo "Response Gist: $RESPONSE_GIST_ID"
-          echo "GITHUB_API_URL: $GITHUB_API_URL"
           echo "========================================"
           
-          # Test gh connectivity first
-          echo "[$(date -u +%H:%M:%S)] Testing gh connectivity..."
-          GH_TEST=$(gh api "gists/$COMMAND_GIST_ID" 2>&1)
-          echo "[$(date -u +%H:%M:%S)] gh test result: $(echo "$GH_TEST" | head -c 300)"
+          # Test basic connectivity first
+          echo "[$(date -u +%H:%M:%S)] Testing basic connectivity..."
+          echo "[$(date -u +%H:%M:%S)] Testing github.com..."
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1 || echo "github.com FAILED"
+          
+          echo "[$(date -u +%H:%M:%S)] Testing api.github.com..."
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://api.github.com" 2>&1 || echo "api.github.com FAILED"
+          
+          echo "[$(date -u +%H:%M:%S)] Testing example.com..."
+          curl -sS --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1 || echo "example.com FAILED"
+          
+          echo "[$(date -u +%H:%M:%S)] Testing gh CLI..."
+          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200 || echo "gh FAILED"
+          
+          echo "[$(date -u +%H:%M:%S)] Connectivity tests complete"
           
           # Main polling loop
           while true; do
