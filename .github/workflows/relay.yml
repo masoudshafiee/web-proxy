@@ -21,19 +21,40 @@ jobs:
           echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # Use gh with --hostname github.com to bypass api.github.com blocking
-          # github.com is whitelisted, api.github.com is blocked in Iran
-          alias gh='gh --hostname github.com'
-          
-          # Test connectivity
-          echo "[$(date -u +%H:%M:%S)] Testing gh connectivity..."
-          gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200 || echo "gh FAILED"
+          # Test 1: gh api (default - goes to api.github.com)
+          echo "[$(date -u +%H:%M:%S)] Test 1: gh api (default)"
+          timeout 15 gh api "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200
           echo ""
+          echo "Exit code: $?"
           
+          # Test 2: gh api --hostname github.com
+          echo "[$(date -u +%H:%M:%S)] Test 2: gh api --hostname github.com"
+          timeout 15 gh api --hostname github.com "gists/$COMMAND_GIST_ID" 2>&1 | head -c 200
+          echo ""
+          echo "Exit code: $?"
+          
+          # Test 3: curl to github.com
+          echo "[$(date -u +%H:%M:%S)] Test 3: curl github.com"
+          timeout 10 curl -sS -o /dev/null -w "HTTP %{http_code}\n" "https://github.com" 2>&1
+          echo "Exit code: $?"
+          
+          # Test 4: curl to api.github.com
+          echo "[$(date -u +%H:%M:%S)] Test 4: curl api.github.com"
+          timeout 10 curl -sS -o /dev/null -w "HTTP %{http_code}\n" "https://api.github.com" 2>&1
+          echo "Exit code: $?"
+          
+          # Test 5: curl to example.com
+          echo "[$(date -u +%H:%M:%S)] Test 5: curl example.com"
+          timeout 10 curl -sS -o /dev/null -w "HTTP %{http_code}\n" "https://example.com" 2>&1
+          echo "Exit code: $?"
+          
+          echo "[$(date -u +%H:%M:%S)] Tests complete"
+          
+          # If gh works, enter main loop
           # Main polling loop
           while true; do
-            # Fetch command gist using gh with hostname github.com
-            GIST=$(gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
+            # Fetch command gist using gh
+            GIST=$(timeout 15 gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
             
             if [ -z "$GIST" ]; then
               echo "[$(date -u +%H:%M:%S)] Failed to fetch command gist, retrying..."
@@ -49,7 +70,7 @@ jobs:
             fi
             
             # Fetch raw content using gh
-            DATA=$(gh api "$RAW_URL" 2>/dev/null || echo "")
+            DATA=$(timeout 15 gh api "$RAW_URL" 2>/dev/null || echo "")
             JOB_ID=$(echo "$DATA" | jq -r '.id // empty')
             
             if [ -z "$JOB_ID" ]; then
@@ -88,10 +109,10 @@ jobs:
                 [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
                 FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
                 echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
-                RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
+                RESPONSE=$(timeout 30 curl -sS -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
               else
                 FULL_URL="${PROTO}://${HOST}/"
-                RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
+                RESPONSE=$(timeout 30 curl -sS -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
               fi
             else
               if timeout 10 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
@@ -118,7 +139,7 @@ jobs:
             
             # Update response gist using gh
             echo "$RESPONSE_JSON" > /tmp/response_payload.json
-            gh api --method PATCH "gists/$RESPONSE_GIST_ID" \
+            timeout 15 gh api --method PATCH "gists/$RESPONSE_GIST_ID" \
               --input /tmp/response_payload.json > /dev/null 2>&1
             
             echo "[$(date -u +%H:%M:%S)] Response sent for job: $JOB_ID ($(echo "$RESPONSE" | wc -c) bytes)"
