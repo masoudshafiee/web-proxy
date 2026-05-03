@@ -109,8 +109,11 @@ jobs:
               --arg resp "$RESPONSE_B64" \
               '{id: $id, response: $resp}')
             
-            # Update response gist
+            # Update response in the SAME gist (simpler for client)
             ESCAPED=$(printf '%s' "$RESPONSE_JSON" | jq -Rs .)
+            api --request PATCH "https://api.github.com/gists/$COMMAND_GIST_ID" \
+              -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
+            # Also update the separate response gist for redundancy
             api --request PATCH "https://api.github.com/gists/$RESPONSE_GIST_ID" \
               -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
             
