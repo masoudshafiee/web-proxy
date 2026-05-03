@@ -16,7 +16,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GIST_PAT }}
         shell: bash
         run: |
-          set -euo pipefail
+          # No set -e to allow graceful error handling
+
           
           COMMAND_GIST="$COMMAND_GIST_ID"
           RESPONSE_GIST="$RESPONSE_GIST_ID"
