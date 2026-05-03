@@ -9,34 +9,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Run Gist Tunnel Relay Agent
         env:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
           RESPONSE_GIST_ID: ${{ secrets.RESPONSE_GIST_ID }}
-          GITHUB_TOKEN: ${{ secrets.GIST_PAT }}
+          GH_TOKEN: ${{ secrets.GIST_PAT }}
         shell: bash
         run: |
-          # No set -e to allow graceful error handling
-
-          
-          COMMAND_GIST="$COMMAND_GIST_ID"
-          RESPONSE_GIST="$RESPONSE_GIST_ID"
-          TOKEN="$GITHUB_TOKEN"
-          
           echo "=== Gist Tunnel Relay Agent Started ==="
-          echo "Command Gist: $COMMAND_GIST"
-          echo "Response Gist: $RESPONSE_GIST"
+          echo "Command Gist: $COMMAND_GIST_ID"
+          echo "Response Gist: $RESPONSE_GIST_ID"
           echo "========================================"
           
-          # API helper using curl (works fine on Azure runner)
-          api() {
-            curl -s -H "Authorization: token $TOKEN" "$@"
-          }
+          # Use gh CLI instead of curl to api.github.com (which is blocked in Iran)
+          # gh uses github.com which is whitelisted
           
           # Main polling loop
           while true; do
-            # Fetch command gist
-            GIST=$(api "https://api.github.com/gists/$COMMAND_GIST")
+            # Fetch command gist using gh (goes through github.com, not blocked)
+            GIST=$(gh api "gists/$COMMAND_GIST_ID" 2>/dev/null || echo "")
+            
+            if [ -z "$GIST" ]; then
+              echo "[$(date -u +%H:%M:%S)] Failed to fetch command gist, retrying..."
+              sleep 5
+              continue
+            fi
+            
             RAW_URL=$(echo "$GIST" | jq -r '.files["command.json"].raw_url // empty')
             
             if [ -z "$RAW_URL" ]; then
@@ -44,7 +44,8 @@ jobs:
               continue
             fi
             
-            DATA=$(api "$RAW_URL")
+            # Fetch raw content using gh
+            DATA=$(gh api "$RAW_URL" 2>/dev/null || echo "")
             JOB_ID=$(echo "$DATA" | jq -r '.id // empty')
             
             if [ -z "$JOB_ID" ]; then
@@ -73,7 +74,7 @@ jobs:
               PAYLOAD=""
             fi
             
-          # For HTTP (port 80), use curl directly (more reliable)
+            # For HTTP (port 80), use curl directly (more reliable)
             RESPONSE=""
             if [ "$PORT" = "80" ] || [ "$PORT" = "443" ]; then
               PROTO="http"
@@ -85,7 +86,6 @@ jobs:
                 [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
                 FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
                 echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
-                # Try curl with verbose for debugging, capture both stdout and stderr
                 RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
                 echo "[$(date -u +%H:%M:%S)] curl exit code: $?"
               else
@@ -117,10 +117,10 @@ jobs:
               --arg resp "$RESPONSE_B64" \
               '{id: $id, response: $resp}')
             
-            # Update response gist
-            ESCAPED=$(printf '%s' "$RESPONSE_JSON" | jq -Rs .)
-            api --request PATCH "https://api.github.com/gists/$RESPONSE_GIST" \
-              -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
+            # Update response gist using gh (goes through github.com, not blocked)
+            echo "$RESPONSE_JSON" > /tmp/response_payload.json
+            gh api --method PATCH "gists/$RESPONSE_GIST_ID" \
+              --input /tmp/response_payload.json > /dev/null 2>&1
             
             echo "[$(date -u +%H:%M:%S)] Response sent for job: $JOB_ID ($(echo "$RESPONSE" | wc -c) bytes)"
             sleep 1
