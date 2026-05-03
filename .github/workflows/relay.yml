@@ -18,4 +18,5 @@ jobs:
       - name: Run Relay Agent
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIST_PAT: ${{ secrets.GIST_PAT }}
         run: python relay_agent.py

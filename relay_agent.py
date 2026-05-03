@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Gist Tunnel Relay Agent - runs on GitHub Actions runner
-Uses GitHub Issues API for command/response (avoids gist rate limits)
+Uses GitHub Issues API for command/response.
+GET uses GITHUB_TOKEN (read-only), PATCH uses GIST_PAT (write).
 """
 import requests, json, time, base64, sys, os, socket
 
@@ -11,24 +12,36 @@ sys.stderr.reconfigure(line_buffering=True)
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-token = os.environ.get('GITHUB_TOKEN', '')
-log(f'Token length: {len(token)} chars')
+github_token = os.environ.get('GITHUB_TOKEN', '')
+gist_pat = os.environ.get('GIST_PAT', '')
 
-session = requests.Session()
-session.headers.update({
-    'Authorization': f'token {token}',
+log(f'GITHUB_TOKEN length: {len(github_token)} chars')
+log(f'GIST_PAT length: {len(gist_pat)} chars')
+
+# Read-only session (GITHUB_TOKEN)
+read_session = requests.Session()
+read_session.headers.update({
+    'Authorization': f'token {github_token}',
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'gist-tunnel-relay/1.0'
+})
+
+# Write session (GIST_PAT)
+write_session = requests.Session()
+write_session.headers.update({
+    'Authorization': f'token {gist_pat}',
     'Accept': 'application/vnd.github.v3+json',
     'User-Agent': 'gist-tunnel-relay/1.0'
 })
 
 REPO = 'masoudshafiee/web-proxy'
-COMMAND_ISSUE = 1  # Issue #1 for commands
-RESPONSE_ISSUE = 2  # Issue #2 for responses
+COMMAND_ISSUE = 1
+RESPONSE_ISSUE = 2
 
 def get_command():
-    """Read command from Issue #1 body."""
+    """Read command from Issue #1 body using GITHUB_TOKEN."""
     try:
-        r = session.get(
+        r = read_session.get(
             f'https://api.github.com/repos/{REPO}/issues/{COMMAND_ISSUE}',
             timeout=15
         )
@@ -49,10 +62,10 @@ def get_command():
         return None
 
 def send_response(job_id, response_b64):
-    """Write response to Issue #2 body."""
+    """Write response to Issue #2 body using GIST_PAT."""
     try:
         payload = json.dumps({'id': job_id, 'response': response_b64})
-        r = session.patch(
+        r = write_session.patch(
             f'https://api.github.com/repos/{REPO}/issues/{RESPONSE_ISSUE}',
             json={'body': payload},
             timeout=30
