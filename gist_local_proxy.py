@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gist Tunnel - Local HTTP/HTTPS Proxy
-Uses 'gh api' to communicate with GitHub Gists.
+Uses 'gh api' to communicate with GitHub.
 Acts as a transparent HTTP proxy on 127.0.0.1:8080
 Supports both HTTP and HTTPS CONNECT tunneling.
 """
@@ -10,7 +10,8 @@ import http.server, socketserver, urllib.parse, select, tempfile
 
 # ===== CONFIGURATION =====
 COMMAND_GIST = "5e6abed0b61ab902b6efd837e57cd3e2"
-RESPONSE_GIST = "94bef5a7a4c1433c50cd8d17c2712693"
+REPO = "masoudshafiee/web-proxy"
+RESPONSE_FILE = "response_data.json"
 LISTEN_PORT = 8080
 POLL_INTERVAL = 1.5
 MAX_RESPONSE_SIZE = 2_000_000
@@ -42,33 +43,6 @@ def gh_api(method, endpoint, data=None):
                 time.sleep(2 ** attempt)
     raise RuntimeError(f"gh api error after 3 retries")
 
-def gh_api_raw(method, url, data=None):
-    """Execute gh api with a full URL (for raw.githubusercontent.com PUT)."""
-    cmd = ["gh", "api", "--method", method, "--raw", url]
-    temp_path = None
-    if data:
-        fd, temp_path = tempfile.mkstemp(suffix=".json")
-        with os.fdopen(fd, 'w') as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        cmd.extend(["--input", temp_path])
-    for attempt in range(3):
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if temp_path:
-                try: os.unlink(temp_path)
-                except: pass
-            if result.returncode == 0:
-                return result.stdout
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-        except Exception as e:
-            if temp_path:
-                try: os.unlink(temp_path)
-                except: pass
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-    raise RuntimeError(f"gh api raw error after 3 retries")
-
 def push_command(job_id, host, port, payload=b''):
     payload_b64 = base64.b64encode(payload).decode()
     content = json.dumps({
@@ -81,24 +55,27 @@ def push_command(job_id, host, port, payload=b''):
     gh_api("PATCH", f"/gists/{COMMAND_GIST}", data=patch_data)
 
 def get_response(job_id, timeout_sec=60):
+    """Poll repo file for response matching our job_id."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
-            gist = gh_api("GET", f"/gists/{RESPONSE_GIST}")
-            if "files" in gist and "response.json" in gist["files"]:
-                raw_url = gist["files"]["response.json"]["raw_url"]
-                # Read raw content directly
-                result = subprocess.run(
-                    ["gh", "api", "--method", "GET", "--raw", raw_url],
-                    capture_output=True, text=True, timeout=15
-                )
-                if result.returncode == 0 and result.stdout:
-                    resp = json.loads(result.stdout)
+            # Read repo file content via gh api
+            result = subprocess.run(
+                ["gh", "api", f"/repos/{REPO}/contents/{RESPONSE_FILE}", "--jq", ".content"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0 and result.stdout:
+                content_b64 = result.stdout.strip()
+                try:
+                    content = base64.b64decode(content_b64).decode()
+                    resp = json.loads(content)
                     if resp.get("id") == job_id:
                         resp_b64 = resp.get("response", "")
                         if resp_b64:
                             return base64.b64decode(resp_b64)
                         return b""
+                except:
+                    pass
         except Exception as e:
             pass
         time.sleep(POLL_INTERVAL)

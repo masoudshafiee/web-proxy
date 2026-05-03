@@ -20,4 +20,5 @@ jobs:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
           RESPONSE_GIST_ID: ${{ secrets.RESPONSE_GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python relay_agent.py
