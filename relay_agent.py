@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Gist Tunnel Relay Agent - runs on GitHub Actions runner
-Polls command gist, fetches URLs via TCP, writes response to repo file
-Uses repo file API instead of gist PATCH to avoid gist rate limits
+Uses GitHub Issues API for command/response (avoids gist rate limits)
 """
 import requests, json, time, base64, sys, os, socket
 
@@ -12,51 +11,36 @@ sys.stderr.reconfigure(line_buffering=True)
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-command_gist = os.environ['COMMAND_GIST_ID']
-response_gist = os.environ['RESPONSE_GIST_ID']
-# Use GITHUB_TOKEN (default Actions token) - has repo scope, higher rate limits
-token = os.environ.get('GITHUB_TOKEN', os.environ.get('GIST_PAT', ''))
+token = os.environ.get('GITHUB_TOKEN', '')
+log(f'Token length: {len(token)} chars')
 
-log(f'COMMAND_GIST_ID: {command_gist}')
-log(f'RESPONSE_GIST_ID: {response_gist}')
-log(f'Using token: {"GITHUB_TOKEN" if "GITHUB_TOKEN" in os.environ else "GIST_PAT"}')
-
-# For gist API calls, use GIST_PAT if available
-gist_token = os.environ.get('GIST_PAT', token)
-
-gist_session = requests.Session()
-gist_session.headers.update({
-    'Authorization': f'token {gist_token}',
-    'Accept': 'application/vnd.github.v3+json',
-    'User-Agent': 'gist-tunnel-relay/1.0'
-})
-
-# For repo API calls, use GITHUB_TOKEN (has repo scope)
-repo_session = requests.Session()
-repo_session.headers.update({
+session = requests.Session()
+session.headers.update({
     'Authorization': f'token {token}',
     'Accept': 'application/vnd.github.v3+json',
     'User-Agent': 'gist-tunnel-relay/1.0'
 })
 
 REPO = 'masoudshafiee/web-proxy'
-RESPONSE_FILE = 'response_data.json'
+COMMAND_ISSUE = 1  # Issue #1 for commands
+RESPONSE_ISSUE = 2  # Issue #2 for responses
 
 def get_command():
+    """Read command from Issue #1 body."""
     try:
-        r = gist_session.get(f'https://api.github.com/gists/{command_gist}', timeout=15)
+        r = session.get(
+            f'https://api.github.com/repos/{REPO}/issues/{COMMAND_ISSUE}',
+            timeout=15
+        )
         if r.status_code == 403:
-            log(f'403 on GET gist: {r.text[:100]}')
+            log(f'403 on GET issue: {r.text[:100]}')
             time.sleep(5)
             return None
         r.raise_for_status()
-        gist = r.json()
-        if 'command.json' not in gist.get('files', {}):
+        body = r.json().get('body', '')
+        if not body:
             return None
-        raw_url = gist['files']['command.json']['raw_url']
-        r = gist_session.get(raw_url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = json.loads(body)
         if not data.get('id'):
             return None
         return data
@@ -64,37 +48,18 @@ def get_command():
         log(f'get_command error: {e}')
         return None
 
-def send_response_via_repo(job_id, response_b64):
-    """Send response by writing to a file in the repo using GitHub API."""
+def send_response(job_id, response_b64):
+    """Write response to Issue #2 body."""
     try:
         payload = json.dumps({'id': job_id, 'response': response_b64})
-        
-        # Try to get existing file SHA first
-        sha = None
-        r = repo_session.get(
-            f'https://api.github.com/repos/{REPO}/contents/{RESPONSE_FILE}',
-            timeout=15
-        )
-        if r.status_code == 200:
-            sha = r.json().get('sha')
-        
-        # Create/update file
-        data = {
-            'message': f'Response {job_id}',
-            'content': base64.b64encode(payload.encode()).decode(),
-            'branch': 'main'
-        }
-        if sha:
-            data['sha'] = sha
-        
-        r = repo_session.put(
-            f'https://api.github.com/repos/{REPO}/contents/{RESPONSE_FILE}',
-            json=data,
+        r = session.patch(
+            f'https://api.github.com/repos/{REPO}/issues/{RESPONSE_ISSUE}',
+            json={'body': payload},
             timeout=30
         )
-        log(f'Repo PUT status: {r.status_code}')
+        log(f'Issue PATCH status: {r.status_code}')
         if r.status_code >= 400:
-            log(f'Repo PUT error: {r.text[:200]}')
+            log(f'Issue PATCH error: {r.text[:200]}')
         else:
             log(f'Response sent for {job_id}: {len(response_b64)} bytes')
     except Exception as e:
@@ -151,6 +116,6 @@ while True:
         sock.close()
 
     response_b64 = base64.b64encode(response).decode()
-    send_response_via_repo(job_id, response_b64)
+    send_response(job_id, response_b64)
     log(f'Job {job_id} completed: {len(response)} bytes')
     time.sleep(1)

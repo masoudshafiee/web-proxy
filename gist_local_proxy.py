@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gist Tunnel - Local HTTP/HTTPS Proxy
-Uses 'gh api' to communicate with GitHub.
+Uses 'gh api' with GitHub Issues API for command/response.
 Acts as a transparent HTTP proxy on 127.0.0.1:8080
 Supports both HTTP and HTTPS CONNECT tunneling.
 """
@@ -9,9 +9,9 @@ import subprocess, json, time, base64, uuid, sys, os, threading, socket as sock_
 import http.server, socketserver, urllib.parse, select, tempfile
 
 # ===== CONFIGURATION =====
-COMMAND_GIST = "5e6abed0b61ab902b6efd837e57cd3e2"
 REPO = "masoudshafiee/web-proxy"
-RESPONSE_FILE = "response_data.json"
+COMMAND_ISSUE = 1  # Issue #1 for commands
+RESPONSE_ISSUE = 2  # Issue #2 for responses
 LISTEN_PORT = 8080
 POLL_INTERVAL = 1.5
 MAX_RESPONSE_SIZE = 2_000_000
@@ -44,6 +44,7 @@ def gh_api(method, endpoint, data=None):
     raise RuntimeError(f"gh api error after 3 retries")
 
 def push_command(job_id, host, port, payload=b''):
+    """Write command to Issue #1 body."""
     payload_b64 = base64.b64encode(payload).decode()
     content = json.dumps({
         "id": job_id,
@@ -51,31 +52,22 @@ def push_command(job_id, host, port, payload=b''):
         "port": port,
         "payload": payload_b64
     })
-    patch_data = {"files": {"command.json": {"content": content}}}
-    gh_api("PATCH", f"/gists/{COMMAND_GIST}", data=patch_data)
+    gh_api("PATCH", f"/repos/{REPO}/issues/{COMMAND_ISSUE}", data={"body": content})
 
 def get_response(job_id, timeout_sec=60):
-    """Poll repo file for response matching our job_id."""
+    """Poll Issue #2 for response matching our job_id."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
-            # Read repo file content via gh api
-            result = subprocess.run(
-                ["gh", "api", f"/repos/{REPO}/contents/{RESPONSE_FILE}", "--jq", ".content"],
-                capture_output=True, text=True, timeout=15
-            )
-            if result.returncode == 0 and result.stdout:
-                content_b64 = result.stdout.strip()
-                try:
-                    content = base64.b64decode(content_b64).decode()
-                    resp = json.loads(content)
-                    if resp.get("id") == job_id:
-                        resp_b64 = resp.get("response", "")
-                        if resp_b64:
-                            return base64.b64decode(resp_b64)
-                        return b""
-                except:
-                    pass
+            result = gh_api("GET", f"/repos/{REPO}/issues/{RESPONSE_ISSUE}")
+            body = result.get("body", "")
+            if body:
+                resp = json.loads(body)
+                if resp.get("id") == job_id:
+                    resp_b64 = resp.get("response", "")
+                    if resp_b64:
+                        return base64.b64decode(resp_b64)
+                    return b""
         except Exception as e:
             pass
         time.sleep(POLL_INTERVAL)
@@ -87,10 +79,10 @@ def fetch_via_tunnel(host, port, payload=b''):
     return get_response(job_id)
 
 class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
-    """HTTP Proxy handler that forwards requests through Gist tunnel."""
+    """HTTP Proxy handler that forwards requests through tunnel."""
     
     def do_CONNECT(self):
-        """Handle HTTPS CONNECT method - tunnel raw TCP through Gist."""
+        """Handle HTTPS CONNECT method."""
         try:
             host, port_str = self.path.split(':')
             port = int(port_str)
@@ -143,7 +135,7 @@ class TunnelProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
     
     def _handle_http_request(self, method):
-        """Handle regular HTTP requests (GET, POST, etc.)."""
+        """Handle regular HTTP requests."""
         parsed = urllib.parse.urlparse(self.path)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == 'https' else 80)
@@ -201,14 +193,15 @@ def main():
         print("ERROR: 'gh' CLI not found. Install GitHub CLI first.")
         sys.exit(1)
     
+    # Verify issues exist
     try:
-        gh_api("GET", f"/gists/{COMMAND_GIST}")
-        print(f"[+] Gist {COMMAND_GIST} accessible")
+        gh_api("GET", f"/repos/{REPO}/issues/{COMMAND_ISSUE}")
+        print(f"[+] Issue #{COMMAND_ISSUE} accessible")
     except Exception as e:
-        print(f"[-] Cannot access Gist: {e}")
+        print(f"[-] Cannot access Issue #{COMMAND_ISSUE}: {e}")
         sys.exit(1)
     
-    print(f"[*] Starting Gist Tunnel Proxy on 127.0.0.1:{LISTEN_PORT}")
+    print(f"[*] Starting Tunnel Proxy on 127.0.0.1:{LISTEN_PORT}")
     print(f"[*] Set your browser/proxy to HTTP proxy 127.0.0.1:{LISTEN_PORT}")
     print(f"[*] Supports HTTP + HTTPS (CONNECT)")
     print(f"[*] Press Ctrl+C to stop")
