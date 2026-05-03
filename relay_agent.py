@@ -9,6 +9,9 @@ import requests, json, time, base64, sys, os, socket
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
 command_gist = os.environ['COMMAND_GIST_ID']
 response_gist = os.environ['RESPONSE_GIST_ID']
 token = os.environ['GITHUB_TOKEN']
@@ -22,9 +25,6 @@ session.headers.update({
     'Accept': 'application/vnd.github.v3+json',
     'User-Agent': 'gist-tunnel-relay/1.0'
 })
-
-def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 def get_command():
     try:
