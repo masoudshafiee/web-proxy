@@ -9,114 +9,97 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - name: Run Gist Tunnel Relay Agent
+      - name: Run Relay Agent (Python)
         env:
           COMMAND_GIST_ID: ${{ secrets.COMMAND_GIST_ID }}
           RESPONSE_GIST_ID: ${{ secrets.RESPONSE_GIST_ID }}
-          GH_TOKEN: ${{ secrets.GIST_PAT }}
-        shell: bash
+          GITHUB_TOKEN: ${{ secrets.GIST_PAT }}
         run: |
-          echo "=== Gist Tunnel Relay Agent Started ==="
-          echo "Command Gist: $COMMAND_GIST_ID"
-          echo "Response Gist: $RESPONSE_GIST_ID"
-          echo "========================================"
-          
-          # API helper using curl (works fine on Azure runner)
-          api() {
-            curl -s -H "Authorization: token $GH_TOKEN" "$@"
-          }
-          
-          # Main polling loop
-          while true; do
-            # Fetch command gist
-            GIST=$(api "https://api.github.com/gists/$COMMAND_GIST_ID")
-            RAW_URL=$(echo "$GIST" | jq -r '.files["command.json"].raw_url // empty')
-            
-            if [ -z "$RAW_URL" ]; then
-              sleep 2
-              continue
-            fi
-            
-            DATA=$(api "$RAW_URL")
-            JOB_ID=$(echo "$DATA" | jq -r '.id // empty')
-            
-            if [ -z "$JOB_ID" ]; then
-              sleep 2
-              continue
-            fi
-            
-            # Skip if already processed
-            STATE_FILE="/tmp/processed_${JOB_ID}"
-            if [ -f "$STATE_FILE" ]; then
-              sleep 2
-              continue
-            fi
-            touch "$STATE_FILE"
-            
-            HOST=$(echo "$DATA" | jq -r '.host')
-            PORT=$(echo "$DATA" | jq -r '.port')
-            PAYLOAD_B64=$(echo "$DATA" | jq -r '.payload // ""')
-            
-            echo "[$(date -u +%H:%M:%S)] Processing job: $JOB_ID -> $HOST:$PORT"
-            
-            # Decode payload
-            if [ -n "$PAYLOAD_B64" ] && [ "$PAYLOAD_B64" != "null" ]; then
-              PAYLOAD=$(echo "$PAYLOAD_B64" | base64 -d 2>/dev/null || true)
-            else
-              PAYLOAD=""
-            fi
-            
-            # For HTTP/HTTPS, use curl (much more reliable than /dev/tcp)
-            RESPONSE=""
-            if [ "$PORT" = "80" ] || [ "$PORT" = "443" ]; then
-              PROTO="http"
-              [ "$PORT" = "443" ] && PROTO="https"
-              
-              # Extract path from HTTP request payload
-              HTTP_PATH="/"
-              if [ -n "$PAYLOAD" ]; then
-                HTTP_PATH=$(echo "$PAYLOAD" | head -1 | awk '{print $2}')
-                [ -z "$HTTP_PATH" ] && HTTP_PATH="/"
-              fi
-              
-              FULL_URL="${PROTO}://${HOST}${HTTP_PATH}"
-              echo "[$(date -u +%H:%M:%S)] Fetching: $FULL_URL"
-              
-              # Use curl with headers and body
-              RESPONSE=$(curl -sS --max-time 30 -D - "$FULL_URL" 2>&1 || echo "CURL_ERROR: $?")
-              echo "[$(date -u +%H:%M:%S)] Response size: $(echo "$RESPONSE" | wc -c) bytes"
-            else
-              # For non-HTTP ports, use bash /dev/tcp
-              if timeout 30 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null; then
-                exec 3<>/dev/tcp/$HOST/$PORT 2>/dev/null || true
-                if [ -n "$PAYLOAD" ]; then
-                  printf '%s' "$PAYLOAD" >&3 2>/dev/null || true
-                fi
-                # Read response with timeout
-                while IFS= read -r -t 5 line || [ -n "$line" ]; do
-                  RESPONSE+="$line"$'\n'
-                done <&3 2>/dev/null || true
-                exec 3>&- 2>/dev/null || true
-              fi
-            fi
-            
-            # Encode response
-            RESPONSE_B64=$(printf '%s' "$RESPONSE" | base64 -w0 2>/dev/null || echo "")
-            
-            # Build response JSON
-            RESPONSE_JSON=$(jq -n \
-              --arg id "$JOB_ID" \
-              --arg resp "$RESPONSE_B64" \
-              '{id: $id, response: $resp}')
-            
-            # Update response in the SAME gist (simpler for client)
-            ESCAPED=$(printf '%s' "$RESPONSE_JSON" | jq -Rs .)
-            api --request PATCH "https://api.github.com/gists/$COMMAND_GIST_ID" \
-              -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
-            # Also update the separate response gist for redundancy
-            api --request PATCH "https://api.github.com/gists/$RESPONSE_GIST_ID" \
-              -d "{\"files\":{\"response.json\":{\"content\":$ESCAPED}}}" > /dev/null 2>&1
-            
-            echo "[$(date -u +%H:%M:%S)] Response sent for job: $JOB_ID ($(echo "$RESPONSE" | wc -c) bytes)"
-            sleep 1
-          done
+          python3 -c "
+import requests, json, time, base64, sys, os, socket, select
+
+command_gist = os.environ['COMMAND_GIST_ID']
+response_gist = os.environ['RESPONSE_GIST_ID']
+token = os.environ['GITHUB_TOKEN']
+session = requests.Session()
+session.headers.update({'Authorization': f'token {token}'})
+
+def get_command():
+    try:
+        r = session.get(f'https://api.github.com/gists/{command_gist}', timeout=15)
+        r.raise_for_status()
+        gist = r.json()
+        if 'command.json' not in gist.get('files', {}):
+            return None
+        raw_url = gist['files']['command.json']['raw_url']
+        r = session.get(raw_url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get('id'):
+            return None
+        return data
+    except Exception as e:
+        print(f'get_command error: {e}')
+        return None
+
+def send_response(job_id, response_b64):
+    payload = {'id': job_id, 'response': response_b64}
+    content = json.dumps(payload)
+    patch_data = {'files': {'response.json': {'content': content}}}
+    try:
+        r = session.patch(f'https://api.github.com/gists/{response_gist}', json=patch_data, timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        print(f'send_response error: {e}')
+
+processed = set()
+print('Runner started, polling...')
+while True:
+    cmd = get_command()
+    if not cmd:
+        time.sleep(2)
+        continue
+    job_id = cmd['id']
+    if job_id in processed:
+        time.sleep(2)
+        continue
+    processed.add(job_id)
+    host = cmd['host']
+    port = int(cmd['port'])
+    payload_b64 = cmd.get('payload') or ''
+    payload = base64.b64decode(payload_b64) if payload_b64 else b''
+
+    # TCP connection
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    response = b''
+    try:
+        sock.settimeout(10)
+        sock.connect((host, port))
+        if payload:
+            sock.sendall(payload)
+        # Read until connection closes or buffer full
+        sock.settimeout(2)
+        while True:
+            try:
+                chunk = sock.recv(8192)
+                if not chunk:
+                    break
+                response += chunk
+                if len(response) > 2_000_000:  # max 2MB
+                    break
+            except socket.timeout:
+                if len(response) > 0:
+                    break
+                else:
+                    continue
+    except Exception as e:
+        response = f'ERROR:{e}'.encode()
+    finally:
+        sock.close()
+
+    response_b64 = base64.b64encode(response).decode()
+    send_response(job_id, response_b64)
+    print(f'Job {job_id}: {host}:{port} -> {len(response)} bytes')
+    time.sleep(1)
+"
